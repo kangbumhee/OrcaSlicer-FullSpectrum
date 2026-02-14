@@ -9,140 +9,40 @@ jobs:
   build:
     runs-on: windows-2022
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        lfs: true
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
 
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v2
 
-    - name: Install Perl
-      run: choco install strawberryperl -y
+      - name: Install Strawberry Perl
+        run: choco install strawberryperl -y
 
-    - name: Cache Deps
-      id: cache-deps
-      uses: actions/cache@v4
-      with:
-        path: deps/build/OrcaSlicer_dep
-        key: deps-win-v4-${{ hashFiles('deps/**/*.cmake') }}
+      - name: Cache Deps
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: deps/build/OrcaSlicer_dep
+          key: deps-win-v4-${{ hashFiles('deps/**/*.cmake') }}
 
-    - name: Build Deps
-      if: steps.cache-deps.outputs.cache-hit != 'true'
-      shell: cmd
-      run: |
-        mkdir deps\build
-        cd deps\build
-        cmake ../ -G "Visual Studio 17 2022" -A x64 -DDESTDIR="%GITHUB_WORKSPACE%\deps\build\OrcaSlicer_dep" -DCMAKE_BUILD_TYPE=Release -DDEP_DEBUG=OFF -DORCA_INCLUDE_DEBUG_INFO=OFF
-        cmake --build . --config Release --target deps -- -m
+      - name: Build Deps
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          build_release_vs2022.bat deps
 
-    - name: Patch Boost and source files
-      shell: powershell
-      run: |
-        $boostDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include\boost-1_84\boost"
-        $cgalDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include\CGAL"
-        $srcDir = "$env:GITHUB_WORKSPACE\src\libslic3r"
+      - name: Build Slicer
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          build_release_vs2022.bat slicer
 
-        # Patch w32_regex_traits.hpp
-        $f = "$boostDir\regex\v5\w32_regex_traits.hpp"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch '#include\s*<windows\.h>') {
-            $c = "#ifndef NOMINMAX`n#define NOMINMAX`n#endif`n#ifndef WIN32_LEAN_AND_MEAN`n#define WIN32_LEAN_AND_MEAN`n#endif`n#include <windows.h>`n" + $c
-            [IO.File]::WriteAllText($f, $c)
-            Write-Host "Patched w32_regex_traits.hpp"
-          }
-        }
-
-        # Patch nowide/filebuf.hpp
-        $f = "$boostDir\nowide\filebuf.hpp"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch '#ifndef NOMINMAX') {
-            $c = "#ifndef NOMINMAX`n#define NOMINMAX`n#endif`n" + $c
-            [IO.File]::WriteAllText($f, $c)
-            Write-Host "Patched filebuf.hpp"
-          }
-        }
-
-        # Patch Hollowing.cpp - add numeric
-        $f = "$srcDir\SLA\Hollowing.cpp"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch '#include\s*<numeric>') {
-            $c = "#include <numeric>`n" + $c
-            [IO.File]::WriteAllText($f, $c)
-            Write-Host "Patched Hollowing.cpp"
-          }
-        }
-
-        # Patch BlacklistedLibraryCheck.cpp
-        $f = "$srcDir\BlacklistedLibraryCheck.cpp"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch '#include\s*<boost/filesystem\.hpp>') {
-            $c = "#include <boost/filesystem.hpp>`n" + $c
-            [IO.File]::WriteAllText($f, $c)
-            Write-Host "Patched BlacklistedLibraryCheck.cpp"
-          }
-        }
-
-        # Empty out CGAL gmpxx_coercion_traits.h to prevent gmpxx errors
-        $f = "$cgalDir\gmpxx_coercion_traits.h"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch 'CGAL_GMPXX_PATCHED') {
-            $newContent = "// CGAL_GMPXX_PATCHED - emptied to avoid gmpxx.h dependency`n#ifndef CGAL_GMPXX_COERCION_TRAITS_H`n#define CGAL_GMPXX_COERCION_TRAITS_H`n#endif`n"
-            [IO.File]::WriteAllText($f, $newContent)
-            Write-Host "Patched gmpxx_coercion_traits.h"
-          }
-        }
-
-        # Empty out CGAL mpz_class.h
-        $f = "$cgalDir\mpz_class.h"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch 'CGAL_MPZ_CLASS_PATCHED') {
-            $newContent = "// CGAL_MPZ_CLASS_PATCHED - emptied to avoid gmpxx.h dependency`n#ifndef CGAL_MPZ_CLASS_H`n#define CGAL_MPZ_CLASS_H`n#endif`n"
-            [IO.File]::WriteAllText($f, $newContent)
-            Write-Host "Patched mpz_class.h"
-          }
-        }
-
-        # Empty out CGAL mpq_class.h if exists
-        $f = "$cgalDir\mpq_class.h"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch 'CGAL_MPQ_CLASS_PATCHED') {
-            $newContent = "// CGAL_MPQ_CLASS_PATCHED - emptied to avoid gmpxx.h dependency`n#ifndef CGAL_MPQ_CLASS_H`n#define CGAL_MPQ_CLASS_H`n#endif`n"
-            [IO.File]::WriteAllText($f, $newContent)
-            Write-Host "Patched mpq_class.h"
-          }
-        }
-
-        # Empty out CGAL gmpxx.h if exists
-        $f = "$cgalDir\gmpxx.h"
-        if (Test-Path $f) {
-          $c = [IO.File]::ReadAllText($f)
-          if ($c -notmatch 'CGAL_GMPXX_PATCHED_MAIN') {
-            $newContent = "// CGAL_GMPXX_PATCHED_MAIN`n#ifndef CGAL_GMPXX_H`n#define CGAL_GMPXX_H`n#endif`n"
-            [IO.File]::WriteAllText($f, $newContent)
-            Write-Host "Patched CGAL gmpxx.h"
-          }
-        }
-
-    - name: Build App
-      shell: cmd
-      run: |
-        mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\deps\build\OrcaSlicer_dep\usr\local" -DCMAKE_INSTALL_PREFIX="./Snapmaker_Orca" -DCMAKE_BUILD_TYPE=Release -DSLIC3R_PCH=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX /DCGAL_DO_NOT_USE_MPZF"
-        cmake --build . --config Release --target ALL_BUILD -- -m
-
-    - uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: Snapmaker_Orca_AutoColorMapping
-        path: build/src/Release/
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Snapmaker_Orca_AutoColorMapping
+          path: build/Snapmaker_Orca/

@@ -5,6 +5,9 @@ on:
     branches: [ auto-color-mapping ]
   workflow_dispatch:
 
+env:
+  CXXFLAGS: /DNOMINMAX
+
 jobs:
   build:
     runs-on: windows-2022
@@ -19,7 +22,14 @@ jobs:
         arch: x64
     - name: Install Perl
       run: choco install strawberryperl -y
+    - name: Cache Deps
+      id: cache-deps
+      uses: actions/cache@v4
+      with:
+        path: deps/build/OrcaSlicer_dep
+        key: deps-win-v1-${{ hashFiles('deps/**/*.cmake') }}
     - name: Build Deps
+      if: steps.cache-deps.outputs.cache-hit != 'true'
       shell: cmd
       run: |
         mkdir deps\build

@@ -27,7 +27,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: deps/build/OrcaSlicer_dep
-        key: deps-win-v3-${{ hashFiles('deps/**/*.cmake') }}
+        key: deps-win-v4-${{ hashFiles('deps/**/*.cmake') }}
 
     - name: Build Deps
       if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -42,8 +42,10 @@ jobs:
       shell: powershell
       run: |
         $boostDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include\boost-1_84\boost"
+        $incDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include"
+        $srcDir = "$env:GITHUB_WORKSPACE\src\libslic3r"
         
-        # Patch w32_regex_traits.hpp
+        # Patch w32_regex_traits.hpp - add windows.h
         $f = "$boostDir\regex\v5\w32_regex_traits.hpp"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
@@ -54,7 +56,7 @@ jobs:
           }
         }
         
-        # Patch nowide/filebuf.hpp
+        # Patch nowide/filebuf.hpp - add NOMINMAX guard
         $f = "$boostDir\nowide\filebuf.hpp"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
@@ -65,8 +67,8 @@ jobs:
           }
         }
         
-        # Patch Hollowing.cpp
-        $f = "$env:GITHUB_WORKSPACE\src\libslic3r\SLA\Hollowing.cpp"
+        # Patch Hollowing.cpp - add numeric
+        $f = "$srcDir\SLA\Hollowing.cpp"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
           if ($c -notmatch '#include\s*<numeric>') {
@@ -76,14 +78,33 @@ jobs:
           }
         }
         
-        # Patch BlacklistedLibraryCheck.cpp - add boost filesystem include
-        $f = "$env:GITHUB_WORKSPACE\src\libslic3r\BlacklistedLibraryCheck.cpp"
+        # Patch BlacklistedLibraryCheck.cpp - add boost filesystem
+        $f = "$srcDir\BlacklistedLibraryCheck.cpp"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
           if ($c -notmatch '#include\s*<boost/filesystem\.hpp>') {
             $c = "#include <boost/filesystem.hpp>`n" + $c
             [IO.File]::WriteAllText($f, $c)
             Write-Host "Patched BlacklistedLibraryCheck.cpp"
+          }
+        }
+        
+        # Create gmpxx.h stub (GMP C++ bindings header)
+        $gmpxx = "$incDir\gmpxx.h"
+        if (-not (Test-Path $gmpxx)) {
+          $stub = "#pragma once`n#include `"gmp.h`"`n"
+          [IO.File]::WriteAllText($gmpxx, $stub)
+          Write-Host "Created gmpxx.h stub"
+        }
+        
+        # Patch CGAL/gmpxx.h to use local gmpxx.h
+        $f = "$incDir\CGAL\gmpxx.h"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
+          if ($c -match '#include\s*<gmpxx\.h>') {
+            $c = $c -replace '#include\s*<gmpxx\.h>', '#include "gmpxx.h"'
+            [IO.File]::WriteAllText($f, $c)
+            Write-Host "Patched CGAL/gmpxx.h"
           }
         }
 

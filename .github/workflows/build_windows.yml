@@ -42,10 +42,10 @@ jobs:
       shell: powershell
       run: |
         $boostDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include\boost-1_84\boost"
-        $incDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include"
+        $cgalDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include\CGAL"
         $srcDir = "$env:GITHUB_WORKSPACE\src\libslic3r"
-        
-        # Patch w32_regex_traits.hpp - add windows.h
+
+        # Patch w32_regex_traits.hpp
         $f = "$boostDir\regex\v5\w32_regex_traits.hpp"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
@@ -55,8 +55,8 @@ jobs:
             Write-Host "Patched w32_regex_traits.hpp"
           }
         }
-        
-        # Patch nowide/filebuf.hpp - add NOMINMAX guard
+
+        # Patch nowide/filebuf.hpp
         $f = "$boostDir\nowide\filebuf.hpp"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
@@ -66,7 +66,7 @@ jobs:
             Write-Host "Patched filebuf.hpp"
           }
         }
-        
+
         # Patch Hollowing.cpp - add numeric
         $f = "$srcDir\SLA\Hollowing.cpp"
         if (Test-Path $f) {
@@ -77,8 +77,8 @@ jobs:
             Write-Host "Patched Hollowing.cpp"
           }
         }
-        
-        # Patch BlacklistedLibraryCheck.cpp - add boost filesystem
+
+        # Patch BlacklistedLibraryCheck.cpp
         $f = "$srcDir\BlacklistedLibraryCheck.cpp"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
@@ -88,23 +88,48 @@ jobs:
             Write-Host "Patched BlacklistedLibraryCheck.cpp"
           }
         }
-        
-        # Create gmpxx.h stub (GMP C++ bindings header)
-        $gmpxx = "$incDir\gmpxx.h"
-        if (-not (Test-Path $gmpxx)) {
-          $stub = "#pragma once`n#include `"gmp.h`"`n"
-          [IO.File]::WriteAllText($gmpxx, $stub)
-          Write-Host "Created gmpxx.h stub"
-        }
-        
-        # Patch CGAL/gmpxx.h to use local gmpxx.h
-        $f = "$incDir\CGAL\gmpxx.h"
+
+        # Empty out CGAL gmpxx_coercion_traits.h to prevent gmpxx errors
+        $f = "$cgalDir\gmpxx_coercion_traits.h"
         if (Test-Path $f) {
           $c = [IO.File]::ReadAllText($f)
-          if ($c -match '#include\s*<gmpxx\.h>') {
-            $c = $c -replace '#include\s*<gmpxx\.h>', '#include "gmpxx.h"'
-            [IO.File]::WriteAllText($f, $c)
-            Write-Host "Patched CGAL/gmpxx.h"
+          if ($c -notmatch 'CGAL_GMPXX_PATCHED') {
+            $newContent = "// CGAL_GMPXX_PATCHED - emptied to avoid gmpxx.h dependency`n#ifndef CGAL_GMPXX_COERCION_TRAITS_H`n#define CGAL_GMPXX_COERCION_TRAITS_H`n#endif`n"
+            [IO.File]::WriteAllText($f, $newContent)
+            Write-Host "Patched gmpxx_coercion_traits.h"
+          }
+        }
+
+        # Empty out CGAL mpz_class.h
+        $f = "$cgalDir\mpz_class.h"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
+          if ($c -notmatch 'CGAL_MPZ_CLASS_PATCHED') {
+            $newContent = "// CGAL_MPZ_CLASS_PATCHED - emptied to avoid gmpxx.h dependency`n#ifndef CGAL_MPZ_CLASS_H`n#define CGAL_MPZ_CLASS_H`n#endif`n"
+            [IO.File]::WriteAllText($f, $newContent)
+            Write-Host "Patched mpz_class.h"
+          }
+        }
+
+        # Empty out CGAL mpq_class.h if exists
+        $f = "$cgalDir\mpq_class.h"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
+          if ($c -notmatch 'CGAL_MPQ_CLASS_PATCHED') {
+            $newContent = "// CGAL_MPQ_CLASS_PATCHED - emptied to avoid gmpxx.h dependency`n#ifndef CGAL_MPQ_CLASS_H`n#define CGAL_MPQ_CLASS_H`n#endif`n"
+            [IO.File]::WriteAllText($f, $newContent)
+            Write-Host "Patched mpq_class.h"
+          }
+        }
+
+        # Empty out CGAL gmpxx.h if exists
+        $f = "$cgalDir\gmpxx.h"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
+          if ($c -notmatch 'CGAL_GMPXX_PATCHED_MAIN') {
+            $newContent = "// CGAL_GMPXX_PATCHED_MAIN`n#ifndef CGAL_GMPXX_H`n#define CGAL_GMPXX_H`n#endif`n"
+            [IO.File]::WriteAllText($f, $newContent)
+            Write-Host "Patched CGAL gmpxx.h"
           }
         }
 
@@ -113,7 +138,7 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\deps\build\OrcaSlicer_dep\usr\local" -DCMAKE_INSTALL_PREFIX="./Snapmaker_Orca" -DCMAKE_BUILD_TYPE=Release -DSLIC3R_PCH=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX"
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\deps\build\OrcaSlicer_dep\usr\local" -DCMAKE_INSTALL_PREFIX="./Snapmaker_Orca" -DCMAKE_BUILD_TYPE=Release -DSLIC3R_PCH=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX /DCGAL_DO_NOT_USE_MPZF"
         cmake --build . --config Release --target ALL_BUILD -- -m
 
     - uses: actions/upload-artifact@v4

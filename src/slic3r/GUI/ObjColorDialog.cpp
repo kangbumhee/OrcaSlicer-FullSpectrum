@@ -16,6 +16,8 @@
 #include <wx/sizer.h>
 
 #include "libslic3r/ObjColorUtils.hpp"
+#include "libslic3r/MixedFilament.hpp"
+#include "libslic3r/PresetBundle.hpp"
 
 using namespace Slic3r;
 using namespace Slic3r::GUI;
@@ -395,21 +397,40 @@ bool ObjColorPanel::is_ok() {
 
 void ObjColorPanel::update_filament_ids()
 {
+    // 물리 필라멘트 색상이 deal_default_strategy에서 이미 교체되었으므로,
+    // 여기서는 add_custom_filament 호출이 필요 없다.
+    // 단, m_is_add_filament가 true인 경우(기존 Append 버튼을 눌렀을 때)만 추가.
     if (m_is_add_filament) {
-        for (auto c:m_new_add_colors) {
-            /*auto evt = new ColorEvent(EVT_ADD_CUSTOM_FILAMENT, c);
-            wxQueueEvent(wxGetApp().plater(), evt);*/
+        for (auto c : m_new_add_colors) {
             wxGetApp().sidebar().add_custom_filament(c);
         }
     }
-   //deal m_filament_ids
-   m_filament_ids.clear();
-   m_filament_ids.reserve(m_input_colors_size);
-   for (size_t i = 0; i < m_input_colors_size; i++) {
-       auto label = m_cluster_labels_from_algo[i];
-       m_filament_ids.emplace_back(m_cluster_map_filaments[label]);
-   }
-   m_first_extruder_id = m_cluster_map_filaments[0];
+
+    // 필라멘트 프리셋 수를 물리 필라멘트 수에 맞춰 조정
+    auto *preset_bundle = wxGetApp().preset_bundle;
+    if (preset_bundle) {
+        size_t num_physical = m_colours.size();
+        // filament_presets 크기 조정
+        while (preset_bundle->filament_presets.size() > num_physical) {
+            preset_bundle->filament_presets.pop_back();
+        }
+        while (preset_bundle->filament_presets.size() < num_physical) {
+            // 마지막 프리셋을 복제
+            if (!preset_bundle->filament_presets.empty())
+                preset_bundle->filament_presets.push_back(preset_bundle->filament_presets.back());
+            else
+                preset_bundle->filament_presets.push_back("Generic PLA");
+        }
+    }
+
+    // m_filament_ids 설정
+    m_filament_ids.clear();
+    m_filament_ids.reserve(m_input_colors_size);
+    for (size_t i = 0; i < m_input_colors_size; i++) {
+        auto label = m_cluster_labels_from_algo[i];
+        m_filament_ids.emplace_back(m_cluster_map_filaments[label]);
+    }
+    m_first_extruder_id = m_cluster_map_filaments[0];
 }
 
 wxBoxSizer *ObjColorPanel::create_approximate_match_btn_sizer(wxWindow *parent)
@@ -508,7 +529,7 @@ std::string ObjColorPanel::get_color_str(const wxColour &color) {
     return str;
 }
 
-ComboBox *ObjColorPanel::CreateEditorCtrl(wxWindow *parent, int id) // wxRect labelRect,, const wxVariant &value
+ComboBox *ObjColorPanel::CreateEditorCtrl(wxWindow *parent, int id)
 {
     std::vector<wxBitmap *> icons = get_extruder_color_icons();
     const double            em          = Slic3r::GUI::wxGetApp().em_unit();
@@ -518,29 +539,68 @@ ComboBox *ObjColorPanel::CreateEditorCtrl(wxWindow *parent, int id) // wxRect la
     m_combox_icon_width                 = icon_width;
     m_combox_icon_height                = icon_height;
     wxColour undefined_color(0,255,0,255);
-    icons.insert(icons.begin(), get_extruder_color_icon(undefined_color.GetAsString(wxC2S_HTML_SYNTAX).ToStdString(), std::to_string(-1), icon_width, icon_height));
+    icons.insert(icons.begin(), get_extruder_color_icon(
+        undefined_color.GetAsString(wxC2S_HTML_SYNTAX).ToStdString(),
+        std::to_string(-1), icon_width, icon_height));
     if (icons.empty())
         return nullptr;
 
-    ::ComboBox *c_editor = new ::ComboBox(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(FromDIP(m_combox_width), -1), 0, nullptr,
-                                          wxCB_READONLY | CB_NO_DROP_ICON | CB_NO_TEXT);
+    // Mixed Filament 아이콘 추가
+    size_t num_physical = m_colours.size();
+    std::vector<std::string> mixed_display_colors;
+    std::vector<wxString> mixed_labels;
+
+    auto *preset_bundle = wxGetApp().preset_bundle;
+    if (preset_bundle) {
+        const auto &mixed_list = preset_bundle->mixed_filaments.mixed_filaments();
+        int mixed_idx = num_physical + 1;
+        for (size_t mi = 0; mi < mixed_list.size(); ++mi) {
+            if (!mixed_list[mi].enabled) continue;
+            std::string dc = mixed_list[mi].display_color;
+            if (dc.empty()) dc = "#888888";
+            mixed_display_colors.push_back(dc);
+            mixed_labels.push_back(wxString::Format("Mix %d+%d",
+                (int)mixed_list[mi].component_a,
+                (int)mixed_list[mi].component_b));
+            icons.push_back(get_extruder_color_icon(
+                dc, std::to_string(mixed_idx), icon_width, icon_height));
+            mixed_idx++;
+        }
+    }
+
+    ::ComboBox *c_editor = new ::ComboBox(parent, wxID_ANY, wxEmptyString,
+        wxDefaultPosition, wxSize(FromDIP(m_combox_width), -1), 0, nullptr,
+        wxCB_READONLY | CB_NO_DROP_ICON | CB_NO_TEXT);
     c_editor->SetMinSize(wxSize(FromDIP(m_combox_width), -1));
     c_editor->SetMaxSize(wxSize(FromDIP(m_combox_width), -1));
     c_editor->GetDropDown().SetUseContentWidth(true);
+
     for (size_t i = 0; i < icons.size(); i++) {
         c_editor->Append(wxString::Format("%d", i), *icons[i]);
         if (i == 0) {
-            c_editor->SetItemTooltip(i,undefined_color.GetAsString(wxC2S_HTML_SYNTAX));
+            c_editor->SetItemTooltip(i,
+                undefined_color.GetAsString(wxC2S_HTML_SYNTAX));
+        } else if (i <= num_physical) {
+            c_editor->SetItemTooltip(i,
+                m_colours[i-1].GetAsString(wxC2S_HTML_SYNTAX));
         } else {
-            c_editor->SetItemTooltip(i, m_colours[i-1].GetAsString(wxC2S_HTML_SYNTAX));
+            size_t mixed_i = i - num_physical - 1;
+            if (mixed_i < mixed_display_colors.size()) {
+                wxString tooltip = mixed_labels[mixed_i] + " " +
+                    wxString(mixed_display_colors[mixed_i]);
+                c_editor->SetItemTooltip(i, tooltip);
+            }
         }
     }
+
     c_editor->SetSelection(0);
     c_editor->SetName(wxString::Format("%d", id));
     c_editor->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent &evt) {
         auto *com_box = static_cast<ComboBox *>(evt.GetEventObject());
         int   i       = atoi(com_box->GetName().c_str());
-        if (i < m_cluster_map_filaments.size()) { m_cluster_map_filaments[i] = com_box->GetSelection(); }
+        if (i < m_cluster_map_filaments.size()) {
+            m_cluster_map_filaments[i] = com_box->GetSelection();
+        }
         evt.StopPropagation();
     });
     return c_editor;
@@ -720,9 +780,168 @@ void ObjColorPanel::deal_algo(char cluster_number, bool redraw_ui)
 
 void ObjColorPanel::deal_default_strategy()
 {
-    deal_add_btn();
-    deal_approximate_match_btn();
-    m_warning_text->SetLabelText(_L("Note: The color has been selected, you can choose OK \nto continue or manually adjust it."));
+    // 목표: K-means로 추출된 클러스터 색상 중 상위 4개를 물리 필라멘트로 설정하고,
+    // Mixed Filament를 자동 생성한 뒤, 나머지 클러스터 색상을
+    // 물리+Mixed 중 가장 가까운 색으로 자동 매핑한다.
+
+    auto *preset_bundle = wxGetApp().preset_bundle;
+    if (!preset_bundle) {
+        // fallback: 기존 방식
+        deal_add_btn();
+        deal_approximate_match_btn();
+        m_warning_text->SetLabelText(_L("Note: The color has been selected, you can choose OK \nto continue or manually adjust it."));
+        return;
+    }
+
+    // --- Step 1: 클러스터 대표색 중 최대 4개를 물리 필라멘트 색상으로 결정 ---
+    const int max_physical = 4;
+    int num_physical = std::min((int)m_cluster_colors_from_algo.size(), max_physical);
+    if (num_physical < 1) {
+        deal_add_btn();
+        deal_approximate_match_btn();
+        return;
+    }
+
+    // 클러스터 색상을 빈도순(또는 그냥 처음 4개)으로 상위 4개 선택
+    // K-means 결과에서 앞에 있는 것이 보통 주요 색상이므로 처음 4개 사용
+    std::vector<wxColour> new_physical_colors;
+    for (int i = 0; i < num_physical; i++) {
+        new_physical_colors.push_back(convert_to_wxColour(m_cluster_colors_from_algo[i]));
+    }
+
+    // --- Step 2: 슬라이서의 기존 필라멘트를 전부 제거하고 새 4색으로 교체 ---
+    ConfigOptionStrings *color_opt = preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour");
+    if (color_opt) {
+        color_opt->values.clear();
+        for (int i = 0; i < num_physical; i++) {
+            color_opt->values.push_back(
+                into_u8(new_physical_colors[i].GetAsString(wxC2S_HTML_SYNTAX)));
+        }
+    }
+
+    // m_colours도 갱신 (UI 표시용)
+    m_colours.clear();
+    for (int i = 0; i < num_physical; i++) {
+        m_colours.push_back(new_physical_colors[i]);
+    }
+
+    // --- Step 3: Mixed Filament 자동 생성 ---
+    std::vector<std::string> physical_color_strings;
+    for (int i = 0; i < num_physical; i++) {
+        physical_color_strings.push_back(
+            into_u8(new_physical_colors[i].GetAsString(wxC2S_HTML_SYNTAX)));
+    }
+    preset_bundle->mixed_filaments.auto_generate(physical_color_strings);
+
+    // --- Step 4: 매핑 후보 목록 구성 (물리 + Mixed) ---
+    // 후보 색상 목록: [0]=undefined, [1..num_physical]=물리, [num_physical+1..]=mixed
+    struct CandidateColor {
+        wxColour color;
+        int combox_index; // ComboBox에서의 인덱스 (1-based, 0은 undefined)
+    };
+    std::vector<CandidateColor> candidates;
+
+    // 물리 필라멘트
+    for (int i = 0; i < num_physical; i++) {
+        candidates.push_back({new_physical_colors[i], i + 1});
+    }
+
+    // Mixed 필라멘트
+    const auto &mixed_list = preset_bundle->mixed_filaments.mixed_filaments();
+    int mixed_combox_idx = num_physical + 1;
+    for (size_t mi = 0; mi < mixed_list.size(); mi++) {
+        if (!mixed_list[mi].enabled) continue;
+        std::string dc = mixed_list[mi].display_color;
+        if (dc.empty()) dc = "#888888";
+        wxColour mc(dc);
+        candidates.push_back({mc, mixed_combox_idx});
+        mixed_combox_idx++;
+    }
+
+    // --- Step 5: 드롭다운 리빌드 (물리 + Mixed 아이콘 포함) ---
+    // 기존 ComboBox들의 아이템을 재구성해야 함
+    const double em = Slic3r::GUI::wxGetApp().em_unit();
+    const int icon_width = lround(4.4 * em);
+    const int icon_height = lround(2 * em);
+    wxColour undefined_color(0, 255, 0, 255);
+
+    for (size_t r = 0; r < m_result_icon_list.size(); r++) {
+        auto *combox = m_result_icon_list[r]->bitmap_combox;
+        if (!combox) continue;
+
+        // 기존 아이템 전부 제거
+        combox->Clear();
+
+        // [0] undefined
+        combox->Append(wxString::Format("%d", 0),
+            *get_extruder_color_icon(
+                undefined_color.GetAsString(wxC2S_HTML_SYNTAX).ToStdString(),
+                std::to_string(-1), icon_width, icon_height));
+        combox->SetItemTooltip(0, undefined_color.GetAsString(wxC2S_HTML_SYNTAX));
+
+        // [1..num_physical] 물리 필라멘트
+        for (int i = 0; i < num_physical; i++) {
+            wxString color_str = new_physical_colors[i].GetAsString(wxC2S_HTML_SYNTAX);
+            combox->Append(wxString::Format("%d", i + 1),
+                *get_extruder_color_icon(
+                    into_u8(color_str), std::to_string(i + 1),
+                    icon_width, icon_height));
+            combox->SetItemTooltip(i + 1, color_str);
+        }
+
+        // [num_physical+1..] Mixed 필라멘트
+        int mix_idx = num_physical + 1;
+        for (size_t mi = 0; mi < mixed_list.size(); mi++) {
+            if (!mixed_list[mi].enabled) continue;
+            std::string dc = mixed_list[mi].display_color;
+            if (dc.empty()) dc = "#888888";
+            wxString label = wxString::Format("Mix %d+%d",
+                (int)mixed_list[mi].component_a,
+                (int)mixed_list[mi].component_b);
+            combox->Append(wxString::Format("%d", mix_idx),
+                *get_extruder_color_icon(dc, std::to_string(mix_idx),
+                    icon_width, icon_height));
+            combox->SetItemTooltip(mix_idx, label + " " + wxString(dc));
+            mix_idx++;
+        }
+
+        combox->SetSelection(0);
+    }
+
+    // --- Step 6: 각 클러스터 색상을 가장 가까운 후보에 자동 매핑 ---
+    auto calc_color_distance = [](wxColour c1, wxColour c2) -> float {
+        float lab1[3], lab2[3];
+        RGB2Lab(c1.Red(), c1.Green(), c1.Blue(), &lab1[0], &lab1[1], &lab1[2]);
+        RGB2Lab(c2.Red(), c2.Green(), c2.Blue(), &lab2[0], &lab2[1], &lab2[2]);
+        return DeltaE76(lab1[0], lab1[1], lab1[2], lab2[0], lab2[1], lab2[2]);
+    };
+
+    for (size_t i = 0; i < m_cluster_colours.size(); i++) {
+        wxColour target = m_cluster_colours[i];
+        float best_dist = 999999.f;
+        int best_idx = 1; // default: 첫 번째 물리 필라멘트
+
+        for (const auto &cand : candidates) {
+            float dist = calc_color_distance(target, cand.color);
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_idx = cand.combox_index;
+            }
+        }
+
+        if (i < m_result_icon_list.size() && m_result_icon_list[i]->bitmap_combox) {
+            m_result_icon_list[i]->bitmap_combox->SetSelection(best_idx);
+        }
+        if (i < m_cluster_map_filaments.size()) {
+            m_cluster_map_filaments[i] = best_idx;
+        }
+    }
+
+    m_is_add_filament = false;
+    m_new_add_colors.clear();
+    m_warning_text->SetLabelText(
+        _L("Note: Physical filaments have been replaced with optimal 4 colors.\n"
+           "Mixed filaments are auto-generated. You can manually adjust if needed."));
 }
 
 void ObjColorPanel::deal_add_btn()

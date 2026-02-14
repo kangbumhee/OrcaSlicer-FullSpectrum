@@ -27,7 +27,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: deps/build/OrcaSlicer_dep
-        key: deps-win-v2-${{ hashFiles('deps/**/*.cmake') }}
+        key: deps-win-v3-${{ hashFiles('deps/**/*.cmake') }}
 
     - name: Build Deps
       if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -38,46 +38,52 @@ jobs:
         cmake ../ -G "Visual Studio 17 2022" -A x64 -DDESTDIR="%GITHUB_WORKSPACE%\deps\build\OrcaSlicer_dep" -DCMAKE_BUILD_TYPE=Release -DDEP_DEBUG=OFF -DORCA_INCLUDE_DEBUG_INFO=OFF
         cmake --build . --config Release --target deps -- -m
 
-    - name: Patch Boost headers
+    - name: Patch Boost and source files
       shell: powershell
       run: |
         $boostDir = "$env:GITHUB_WORKSPACE\deps\build\OrcaSlicer_dep\usr\local\include\boost-1_84\boost"
         
-        # Fix w32_regex_traits.hpp - add windows.h
-        $regexFile = "$boostDir\regex\v5\w32_regex_traits.hpp"
-        if (Test-Path $regexFile) {
-          $content = [IO.File]::ReadAllText($regexFile)
-          if ($content -notmatch '#include\s*<windows\.h>') {
-            $content = "#ifndef NOMINMAX`n#define NOMINMAX`n#endif`n#include <windows.h>`n" + $content
-            [IO.File]::WriteAllText($regexFile, $content)
+        # Patch w32_regex_traits.hpp
+        $f = "$boostDir\regex\v5\w32_regex_traits.hpp"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
+          if ($c -notmatch '#include\s*<windows\.h>') {
+            $c = "#ifndef NOMINMAX`n#define NOMINMAX`n#endif`n#ifndef WIN32_LEAN_AND_MEAN`n#define WIN32_LEAN_AND_MEAN`n#endif`n#include <windows.h>`n" + $c
+            [IO.File]::WriteAllText($f, $c)
             Write-Host "Patched w32_regex_traits.hpp"
           }
         }
         
-        # Fix nowide/filebuf.hpp - add NOMINMAX guard
-        $nowideFile = "$boostDir\nowide\filebuf.hpp"
-        if (Test-Path $nowideFile) {
-          $content = [IO.File]::ReadAllText($nowideFile)
-          if ($content -notmatch '#ifndef NOMINMAX') {
-            $content = "#ifndef NOMINMAX`n#define NOMINMAX`n#endif`n" + $content
-            [IO.File]::WriteAllText($nowideFile, $content)
+        # Patch nowide/filebuf.hpp
+        $f = "$boostDir\nowide\filebuf.hpp"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
+          if ($c -notmatch '#ifndef NOMINMAX') {
+            $c = "#ifndef NOMINMAX`n#define NOMINMAX`n#endif`n" + $c
+            [IO.File]::WriteAllText($f, $c)
             Write-Host "Patched filebuf.hpp"
           }
         }
-
-    - name: Patch source files
-      shell: powershell
-      run: |
-        $srcDir = "$env:GITHUB_WORKSPACE\src\libslic3r"
         
-        # Fix Hollowing.cpp - add numeric
-        $hFile = "$srcDir\SLA\Hollowing.cpp"
-        if (Test-Path $hFile) {
-          $c = [IO.File]::ReadAllText($hFile)
+        # Patch Hollowing.cpp
+        $f = "$env:GITHUB_WORKSPACE\src\libslic3r\SLA\Hollowing.cpp"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
           if ($c -notmatch '#include\s*<numeric>') {
             $c = "#include <numeric>`n" + $c
-            [IO.File]::WriteAllText($hFile, $c)
+            [IO.File]::WriteAllText($f, $c)
             Write-Host "Patched Hollowing.cpp"
+          }
+        }
+        
+        # Patch BlacklistedLibraryCheck.cpp - add boost filesystem include
+        $f = "$env:GITHUB_WORKSPACE\src\libslic3r\BlacklistedLibraryCheck.cpp"
+        if (Test-Path $f) {
+          $c = [IO.File]::ReadAllText($f)
+          if ($c -notmatch '#include\s*<boost/filesystem\.hpp>') {
+            $c = "#include <boost/filesystem.hpp>`n" + $c
+            [IO.File]::WriteAllText($f, $c)
+            Write-Host "Patched BlacklistedLibraryCheck.cpp"
           }
         }
 
@@ -86,7 +92,7 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\deps\build\OrcaSlicer_dep\usr\local" -DCMAKE_INSTALL_PREFIX="./Snapmaker_Orca" -DCMAKE_BUILD_TYPE=Release -DSLIC3R_PCH=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX /DWIN32_LEAN_AND_MEAN /FI windows.h"
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="%GITHUB_WORKSPACE%\deps\build\OrcaSlicer_dep\usr\local" -DCMAKE_INSTALL_PREFIX="./Snapmaker_Orca" -DCMAKE_BUILD_TYPE=Release -DSLIC3R_PCH=OFF -DCMAKE_CXX_FLAGS="/DNOMINMAX"
         cmake --build . --config Release --target ALL_BUILD -- -m
 
     - uses: actions/upload-artifact@v4
